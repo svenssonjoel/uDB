@@ -33,6 +33,42 @@ SOFTWARE.
 #define UDB_MAGIC 0xDBDB
 
 
+#define UDB_STATUS_ERASED     0xFF
+#define UDB_STATUS_ACTIVE     0xFE
+#define UDB_STATUS_COMPACTING 0xFC
+#define UDB_STATUS_GARBAGE    0xF8
+
+// uDB sector header layout:
+// uint16_t magic
+// uint8_t  status
+// uint32_t counter
+
+#define UDB_SECTOR_HEADER_MAGIC_OFFSET 0
+#define UDB_SECTOR_HEADER_STATUS_OFFSET 2
+#define UDB_SECTOR_HEADER_COUNTER_OFFSET 3
+#define UDB_SECTOR_HEADER_SIZE 7
+
+
+static uint16_t sector_magic(udb_t *udb, uint32_t sector) {
+  uint16_t magic;
+  udb->hal.read(udb->hal.base_addresses[sector] +
+                UDB_SECTOR_HEADER_MAGIC_OFFSET, &magic, 2);
+  return magic;
+}
+
+static uint8_t sector_status(udb_t *udb, uint32_t sector) {
+  uint8_t status;
+  udb->hal.read(udb->hal.base_addresses[sector] +
+                UDB_SECTOR_HEADER_STATUS_OFFSET, &status, 1);
+  return status;
+}
+
+static uint32_t sector_counter(udb_t *udb, uint32_t sector) {
+  uint32_t counter;
+  udb->hal.read(udb->hal.base_addresses[sector] +
+                UDB_SECTOR_HEADER_COUNTER_OFFSET, &counter, 4);
+  return counter;
+}
 
 // Initialize the DB and find the active sector
 //  1. No sector has the magic indicator.
@@ -47,9 +83,12 @@ bool udb_init(udb_t *udb, udb_hal_t *hal) {
     if (udb->hal.num_sectors < 2) goto init_done;
 
     for (uint32_t i = 0; i < udb->hal.num_sectors; i ++) {
-      uint16_t magic;
-      udb->hal.read(udb->hal.base_addresses[i], &magic, 2);
+      uint16_t magic = sector_magic(udb, i);
       DBGPRINT("0x%x\n", magic);
+      uint8_t status = sector_status(udb, i);
+      DBGPRINT("0x%x\n", status);
+      uint32_t counter = sector_counter(udb, i);
+      DBGPRINT("0x%x\n", counter);
     }
     r = true;
   }
