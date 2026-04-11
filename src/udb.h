@@ -32,7 +32,7 @@ extern "C" {
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
-
+  
 typedef struct {
   uint32_t *base_addresses;
   uint32_t sector_size;
@@ -43,9 +43,18 @@ typedef struct {
   bool (*read)(uint32_t addr, void *buf, size_t len);
   bool (*write)(uint32_t addr, const void *buf, size_t len);
   bool (*erase)(uint32_t addr, size_t len);
+  // Utility functions provided by target platform
+  uint16_t (*crc16)(const void *buf, size_t len);
 } udb_hal_t;
 
-extern bool udb_init(udb_hal_t *halptr);
+typedef struct {
+  udb_hal_t hal;
+  uint32_t  active_sector;
+  uint32_t  write_pos;
+} udb_t;
+
+  
+extern bool udb_init(udb_t *udb, udb_hal_t *hal);
 #ifdef __cplusplus
 }
 #endif

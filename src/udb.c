@@ -32,17 +32,23 @@ SOFTWARE.
 
 #define UDB_MAGIC 0xDBDB
 
-static udb_hal_t hal;
 
-bool udb_init(udb_hal_t *halptr) {
+
+// Initialize the DB and find the active sector
+//  1. No sector has the magic indicator.
+//  2. There are sectors with magic:
+//     a: A sector with magic has status ACTIVE.
+//     b: No sector with magic har status ACTIVE.
+//  
+bool udb_init(udb_t *udb, udb_hal_t *hal) {
   bool r = false;
-  if (halptr) {
-    hal = *halptr;
-    if (hal.num_sectors < 2) goto init_done;
+  if (udb && hal) {
+    udb->hal = *hal;
+    if (udb->hal.num_sectors < 2) goto init_done;
 
-    for (uint32_t i = 0; i < hal.num_sectors; i ++) {
+    for (uint32_t i = 0; i < udb->hal.num_sectors; i ++) {
       uint16_t magic;
-      hal.read(hal.base_addresses[i], &magic, 2);
+      udb->hal.read(udb->hal.base_addresses[i], &magic, 2);
       DBGPRINT("0x%x\n", magic);
     }
     r = true;
@@ -51,8 +57,15 @@ bool udb_init(udb_hal_t *halptr) {
   return r;
 }
 
+// Read sector headers
 
+// Compaction
 
+// Clearing
+
+// Recovery
+
+// 
 
 
 
