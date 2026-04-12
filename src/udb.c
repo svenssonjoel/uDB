@@ -30,7 +30,7 @@ SOFTWARE.
 #define DBGPRINT
 #endif
 
-#define UDB_MAGIC 0xDBDB
+static const uint16_t UDB_MAGIC = 0xDBDB;
 
 typedef enum {
   UDB_SECTOR_STATUS_ERASED = 0xFF,
@@ -69,37 +69,51 @@ bool udb_init(udb_t *udb, udb_hal_t *hal) {
     //     - If a sector does not contain a header with OK crc
     //       - if entire sector is cleared -> OK.
     //       - if sector contains garbabe -> erase sector. 
- 
-    int active = -1;
-    uint32_t active_counter = 0;
+
+    // Initialize sectors loop
     for (uint32_t i = 0; i < udb->hal.num_sectors; i ++) {
       udb_sector_header_t header;
       get_sector_header(udb, i, &header);
       DBGPRINT("0x%x\n", header.magic);
       DBGPRINT("0x%x\n", header.status);
       DBGPRINT("0x%x\n", header.counter);
-
       if (header.magic != UDB_MAGIC) {
         // For now, just erase the sector
-        hal->erase(udb->hal.base_addresses[i], hal->sector_size);
+        // In the future, check if it is erased already and just
+        // write a new header.
         udb_sector_header_t h;
         h.magic = UDB_MAGIC;
-        h.status = UDB_SECTOR_STATUS_ACTIVE;
+        h.status = UDB_SECTOR_STATUS_ERASED;
         h.counter = 0;
-        hal->write(udb->hal.base_addresses[i], (const void *)&h, sizeof(udb_sector_header_t));
-      }
-      if (header.status == UDB_SECTOR_STATUS_ACTIVE) {
-        // if active_counter == header_counter
-        // is an ambiguity. But picking either as the currently
-        // active for writing should be ok!
-        if (active_counter >= header.counter)
-        active = i;
-        active_counter = header.counter;
+        hal->erase(udb->hal.base_addresses[i], hal->sector_size);
+        hal->write(udb->hal.base_addresses[i], &h, sizeof(udb_sector_header_t));
+      } else {
+        // there is a header here
+        switch (header.status) {
+        case UDB_SECTOR_STATUS_ERASED:
+          DBGPRINT("Sector in state ERASED\n");
+          // Ignore.
+          break;
+        case UDB_SECTOR_STATUS_ACTIVE:
+          if (header.counter >= udb->counter) {
+            udb->counter = header.counter;
+          }
+          break;
+        case UDB_SECTOR_STATUS_COMPACTING:
+          // TODO: Finalize the compaction of this Sector
+          //       But currently not enough is known about
+          //       the state of the flash to do it now.
+          DBGPRINT("Sector in state COMPACTING found at init\n");
+          break;
+        case UDB_SECTOR_STATUS_GARBAGE:
+          // If a GARBAGE sector is found it can be erased
+          // and returned to ERASED state here
+          DBGPRINT("Sector in state GARBAGE fount at init\n");
+          break;
+        }
       }
     }
 
-    // Later we should have created or found the active sector here
-    udb->active_sector = (uint32_t)active;
     r = true;
   }
  init_done:
