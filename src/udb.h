@@ -55,6 +55,7 @@ typedef enum {
 
 typedef struct {
   udb_hal_t hal;
+  udb_state_t state;
   uint32_t  active_sector;
   uint32_t  write_pos;
   uint32_t  counter;

@@ -60,10 +60,75 @@ typedef struct __attribute__((packed)) {
   uint32_t sequence;
 } udb_sector_header_t;
 
+typedef enum {
+  UDB_RECORD_STATUS_EMPTY     = 0xFF,
+  UDB_RECORD_STATUS_WRITING   = 0xFE,
+  UDB_RECORD_STATUS_COMMITTED = 0xFC,
+  UDB_RECORD_STATUS_DELETED   = 0xF8
+} udb_record_status_t;
+
+typedef struct __attribute__((packed)) {
+  uint8_t status;
+  uint32_t key;
+  uint16_t size;
+  uint16_t crc;
+} udb_record_header_t;
+
 static bool get_sector_header(udb_t *udb, uint32_t sector, udb_sector_header_t *header) {
   return udb->hal.read(udb->hal.base_addresses[sector], header, sizeof(udb_sector_header_t));
 }
 
+static uint32_t num_unused_sectors(udb_t *udb) {
+  uint32_t count = 0;
+  for (uint32_t i = 0; i < udb->hal.num_sectors; i++) {
+    udb_sector_header_t header;
+    get_sector_header(udb, i, &header);
+    if (header.magic == UDB_MAGIC && header.status == UDB_SECTOR_STATUS_ERASED)
+      count++;
+  }
+  return count;
+}
+
+static int get_unused_sector(udb_t *udb) {
+  int found = -1;
+  uint32_t lowest_seq = UINT32_MAX;
+  for (uint32_t i = 0; i < udb->hal.num_sectors; i++) {
+    udb_sector_header_t header;
+    get_sector_header(udb, i, &header);
+    if (header.magic == UDB_MAGIC &&
+        header.status == UDB_SECTOR_STATUS_ERASED &&
+        header.sequence <= lowest_seq) {
+      lowest_seq = header.sequence;
+      found = i;
+    }
+  }
+  return found;
+}
+
+static uint32_t find_ff_tail(udb_t *udb, uint32_t sector, uint32_t start) {
+  uint32_t base = udb->hal.base_addresses[sector];
+  uint32_t size = udb->hal.sector_size;
+
+  for (uint32_t i = start; i < size; i++) {
+    uint8_t byte;
+    udb->hal.read(base + i, &byte, 1);
+    if (byte == 0xFF) {
+      bool all_ff = true;
+      for (uint32_t j = i + 1; j < size; j++) {
+        udb->hal.read(base + j, &byte, 1);
+        if (byte != 0xFF) {
+          all_ff = false;
+          break;
+        }
+      }
+      if (all_ff) return i;
+    }
+  }
+  return size; // sector is full
+}
+
+
+// ////////////////////////////////////////////////////////////
 // Initialize the DB and find the active sector
 //  1. No sector has the magic indicator.
 //  2. There are sectors with magic:
@@ -74,6 +139,7 @@ bool udb_init(udb_t *udb, udb_hal_t *hal) {
   bool r = false;
   if (udb && hal) {
     udb->hal = *hal;
+    udb->state = UDB_STATE_UNINITIALIZED;
 
     udb->counter = 0;
     if (udb->hal.num_sectors < 2) goto init_done;
@@ -131,7 +197,7 @@ bool udb_init(udb_t *udb, udb_hal_t *hal) {
           // The sector state is set to GARBAGE after all live
           // values have been moved out of it. so removing garbage
           // here is perfectly safe.
-          DBGPRINT("Sector in state GARBAGE fount at init\n");
+          DBGPRINT("Sector in state GARBAGE found at init\n");
           udb_sector_header_t h;
           h.magic = UDB_MAGIC;
           h.status = UDB_SECTOR_STATUS_ERASED;
@@ -142,11 +208,75 @@ bool udb_init(udb_t *udb, udb_hal_t *hal) {
         }
       }
     }
-    r = true;
+
+    // Find the active sector and the current write_pos
+    int active_sector = -1;
+    uint32_t counter_value = 0;
+    for (uint32_t i = 0; i < udb->hal.num_sectors; i ++) {
+      udb_sector_header_t header;
+      get_sector_header(udb, i, &header);
+      DBGPRINT("0x%x\n", header.magic);
+      DBGPRINT("0x%x\n", header.status);
+      DBGPRINT("0x%x\n", header.sequence);
+      if (header.magic == UDB_MAGIC) {
+        if (header.status == UDB_SECTOR_STATUS_ACTIVE) {
+          if (header.sequence >= counter_value) {
+            counter_value = header.sequence;
+            active_sector = i;
+          }
+        }
+      }  
+    }
+
+    if (active_sector >= 0) {
+      uint32_t base = udb->hal.base_addresses[active_sector];
+      uint32_t pos = sizeof(udb_sector_header_t);
+      while (pos + sizeof(udb_record_header_t) <= udb->hal.sector_size) {
+        udb_record_header_t rec;
+        udb->hal.read(base + pos, &rec, sizeof(udb_record_header_t));
+        if (rec.status == UDB_RECORD_STATUS_EMPTY) break;
+        if (rec.status == UDB_RECORD_STATUS_COMMITTED ||
+            rec.status == UDB_RECORD_STATUS_DELETED) {
+          pos += sizeof(udb_record_header_t) + rec.size;
+        } else {  
+          // The status is either "WRITING" or some corrupt garbage.
+          // Run past all the remaining headers in search for
+          // a sequence of consequtive free bytes.
+          pos = find_ff_tail(udb, active_sector, pos);
+        }
+      }
+      udb->active_sector = active_sector;
+      udb->write_pos = pos;
+      r = true;
+    } else {
+      // No active sector found. Claim the ERASED sector with the lowest
+      // sequence number as active.
+      int free_sector = get_unused_sector(udb);
+      if (free_sector >= 0) {
+        uint8_t stat = UDB_SECTOR_STATUS_ACTIVE;
+        uint32_t offs = udb->hal.base_addresses[free_sector] +
+          offsetof(udb_sector_header_t, status);
+        hal->write(offs, &stat, 1);
+        udb->active_sector = free_sector;
+        udb->write_pos = sizeof(udb_sector_header_t);
+        r = true;
+      }
+    }
+
+    // TODO: Need to look through all the sectors one more time
+    //       and see if there are sectors in state COMPACTING.
+    //       These need to be "finalized" somehow.
+    //       Need to figure out how compaction is to work first though.
+    
   }
  init_done:
+  if (r) udb->state = UDB_STATE_AVAILABLE;
   return r;
 }
+
+
+// ////////////////////////////////////////////////////////////
+// KV interface
 
 bool udb_put(udb_t *udb, uint32_t key, uint8_t *payload, size_t size) {
   (void) udb;
@@ -157,16 +287,6 @@ bool udb_put(udb_t *udb, uint32_t key, uint8_t *payload, size_t size) {
   // payload must be smaller than a (sector_size - sector headers entry headers and so on.)
   return true;
 }
-
-// Read sector headers
-
-// Compaction
-
-// Clearing
-
-// Recovery
-
-// 
 
 
 
