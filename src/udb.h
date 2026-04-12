@@ -47,10 +47,17 @@ typedef struct {
   uint16_t (*crc16)(const void *buf, size_t len);
 } udb_hal_t;
 
+typedef enum {
+  UDB_STATE_UNINITIALIZED = 0,
+  UDB_STATE_AVAILABLE,
+  UDB_STATE_COMPACTING,
+} udb_state_t;
+
 typedef struct {
   udb_hal_t hal;
   uint32_t  active_sector;
   uint32_t  write_pos;
+  uint32_t  counter;
 } udb_t;
 
   

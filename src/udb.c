@@ -32,42 +32,21 @@ SOFTWARE.
 
 #define UDB_MAGIC 0xDBDB
 
+typedef enum {
+  UDB_SECTOR_STATUS_ERASED = 0xFF,
+  UDB_SECTOR_STATUS_ACTIVE = 0xFE,
+  UDB_SECTOR_STATUS_COMPACTING = 0xFC,
+  UDB_SECTOR_STATUS_GARBAGE = 0xF8
+} udb_sector_status_t;
 
-#define UDB_STATUS_ERASED     0xFF
-#define UDB_STATUS_ACTIVE     0xFE
-#define UDB_STATUS_COMPACTING 0xFC
-#define UDB_STATUS_GARBAGE    0xF8
-
-// uDB sector header layout:
-// uint16_t magic
-// uint8_t  status
-// uint32_t counter
-
-#define UDB_SECTOR_HEADER_MAGIC_OFFSET 0
-#define UDB_SECTOR_HEADER_STATUS_OFFSET 2
-#define UDB_SECTOR_HEADER_COUNTER_OFFSET 3
-#define UDB_SECTOR_HEADER_SIZE 7
-
-
-static uint16_t sector_magic(udb_t *udb, uint32_t sector) {
+typedef struct __attribute__((packed)) {
   uint16_t magic;
-  udb->hal.read(udb->hal.base_addresses[sector] +
-                UDB_SECTOR_HEADER_MAGIC_OFFSET, &magic, 2);
-  return magic;
-}
-
-static uint8_t sector_status(udb_t *udb, uint32_t sector) {
   uint8_t status;
-  udb->hal.read(udb->hal.base_addresses[sector] +
-                UDB_SECTOR_HEADER_STATUS_OFFSET, &status, 1);
-  return status;
-}
-
-static uint32_t sector_counter(udb_t *udb, uint32_t sector) {
   uint32_t counter;
-  udb->hal.read(udb->hal.base_addresses[sector] +
-                UDB_SECTOR_HEADER_COUNTER_OFFSET, &counter, 4);
-  return counter;
+} udb_sector_header_t;
+
+static bool get_sector_header(udb_t *udb, uint32_t sector, udb_sector_header_t *header) {
+  return udb->hal.read(udb->hal.base_addresses[sector], header, sizeof(udb_sector_header_t));
 }
 
 // Initialize the DB and find the active sector
@@ -80,20 +59,61 @@ bool udb_init(udb_t *udb, udb_hal_t *hal) {
   bool r = false;
   if (udb && hal) {
     udb->hal = *hal;
+
+    udb->counter = 0;
     if (udb->hal.num_sectors < 2) goto init_done;
 
+    // Things init needs to do later:
+    //  1. look at all sectors.
+    //     - If a sector contains a sector header with OK crc, then it is ok.
+    //     - If a sector does not contain a header with OK crc
+    //       - if entire sector is cleared -> OK.
+    //       - if sector contains garbabe -> erase sector. 
+ 
+    int active = -1;
+    uint32_t active_counter = 0;
     for (uint32_t i = 0; i < udb->hal.num_sectors; i ++) {
-      uint16_t magic = sector_magic(udb, i);
-      DBGPRINT("0x%x\n", magic);
-      uint8_t status = sector_status(udb, i);
-      DBGPRINT("0x%x\n", status);
-      uint32_t counter = sector_counter(udb, i);
-      DBGPRINT("0x%x\n", counter);
+      udb_sector_header_t header;
+      get_sector_header(udb, i, &header);
+      DBGPRINT("0x%x\n", header.magic);
+      DBGPRINT("0x%x\n", header.status);
+      DBGPRINT("0x%x\n", header.counter);
+
+      if (header.magic != UDB_MAGIC) {
+        // For now, just erase the sector
+        hal->erase(udb->hal.base_addresses[i], hal->sector_size);
+        udb_sector_header_t h;
+        h.magic = UDB_MAGIC;
+        h.status = UDB_SECTOR_STATUS_ACTIVE;
+        h.counter = 0;
+        hal->write(udb->hal.base_addresses[i], (const void *)&h, sizeof(udb_sector_header_t));
+      }
+      if (header.status == UDB_SECTOR_STATUS_ACTIVE) {
+        // if active_counter == header_counter
+        // is an ambiguity. But picking either as the currently
+        // active for writing should be ok!
+        if (active_counter >= header.counter)
+        active = i;
+        active_counter = header.counter;
+      }
     }
+
+    // Later we should have created or found the active sector here
+    udb->active_sector = (uint32_t)active;
     r = true;
   }
  init_done:
   return r;
+}
+
+bool udb_put(udb_t *udb, uint32_t key, uint8_t *payload, size_t size) {
+  (void) udb;
+  (void) key;
+  (void) payload;
+  (void) size;
+  // use the active sector and the write_pos.
+  // payload must be smaller than a (sector_size - sector headers entry headers and so on.)
+  return true;
 }
 
 // Read sector headers
