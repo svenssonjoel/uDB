@@ -39,10 +39,25 @@ typedef enum {
   UDB_SECTOR_STATUS_GARBAGE = 0xF8
 } udb_sector_status_t;
 
+// The sequence number is there to create an ordering
+// of operations to flash sectors. The idea is that
+// every erase will assign a new sequence number to the sector.
+// With this we will know that the sector with the highest sequence
+// number was most recently cleared.
+//
+// By preferring the ERASED sector with the smallest sequence number as the next write target
+// one should guarantee wear leveling (round robin usage).
+//
+// The counter can also be used to find the "most likely" active for writing
+// sector upon a restart of the system. the Sector that is ACTIVE and has
+// the highest sequence number of all ACTIVE sectors is the one to write to.
+//
+// Over a small set of sectors a 32bit number will be able to count
+// way more erase cycles than any flash can handly (is this correct) ?
 typedef struct __attribute__((packed)) {
   uint16_t magic;
   uint8_t status;
-  uint32_t counter;
+  uint32_t sequence;
 } udb_sector_header_t;
 
 static bool get_sector_header(udb_t *udb, uint32_t sector, udb_sector_header_t *header) {
@@ -63,20 +78,32 @@ bool udb_init(udb_t *udb, udb_hal_t *hal) {
     udb->counter = 0;
     if (udb->hal.num_sectors < 2) goto init_done;
 
-    // Things init needs to do later:
-    //  1. look at all sectors.
-    //     - If a sector contains a sector header with OK crc, then it is ok.
-    //     - If a sector does not contain a header with OK crc
-    //       - if entire sector is cleared -> OK.
-    //       - if sector contains garbabe -> erase sector. 
-
-    // Initialize sectors loop
+    // recover counter
     for (uint32_t i = 0; i < udb->hal.num_sectors; i ++) {
       udb_sector_header_t header;
       get_sector_header(udb, i, &header);
       DBGPRINT("0x%x\n", header.magic);
       DBGPRINT("0x%x\n", header.status);
-      DBGPRINT("0x%x\n", header.counter);
+      DBGPRINT("0x%x\n", header.sequence);
+      if (header.magic == UDB_MAGIC) {
+        if (header.status == UDB_SECTOR_STATUS_ACTIVE ||
+            header.status == UDB_SECTOR_STATUS_COMPACTING) {
+           if (header.sequence >= udb->counter) {
+            udb->counter = header.sequence;
+          }
+        }
+      }
+    }
+    udb->counter++; 
+    // Counter is recovered
+    // Initialize non-initialized sectors and
+    // recover garbage left by a untimely powercycle.
+    for (uint32_t i = 0; i < udb->hal.num_sectors; i ++) {
+      udb_sector_header_t header;
+      get_sector_header(udb, i, &header);
+      DBGPRINT("0x%x\n", header.magic);
+      DBGPRINT("0x%x\n", header.status);
+      DBGPRINT("0x%x\n", header.sequence);
       if (header.magic != UDB_MAGIC) {
         // For now, just erase the sector
         // In the future, check if it is erased already and just
@@ -84,36 +111,37 @@ bool udb_init(udb_t *udb, udb_hal_t *hal) {
         udb_sector_header_t h;
         h.magic = UDB_MAGIC;
         h.status = UDB_SECTOR_STATUS_ERASED;
-        h.counter = 0;
+        h.sequence = udb->counter++;
         hal->erase(udb->hal.base_addresses[i], hal->sector_size);
         hal->write(udb->hal.base_addresses[i], &h, sizeof(udb_sector_header_t));
       } else {
         // there is a header here
         switch (header.status) {
         case UDB_SECTOR_STATUS_ERASED:
-          DBGPRINT("Sector in state ERASED\n");
           // Ignore.
           break;
         case UDB_SECTOR_STATUS_ACTIVE:
-          if (header.counter >= udb->counter) {
-            udb->counter = header.counter;
-          }
+          // ignore.
           break;
         case UDB_SECTOR_STATUS_COMPACTING:
-          // TODO: Finalize the compaction of this Sector
-          //       But currently not enough is known about
-          //       the state of the flash to do it now.
-          DBGPRINT("Sector in state COMPACTING found at init\n");
           break;
         case UDB_SECTOR_STATUS_GARBAGE:
           // If a GARBAGE sector is found it can be erased
           // and returned to ERASED state here
+          // The sector state is set to GARBAGE after all live
+          // values have been moved out of it. so removing garbage
+          // here is perfectly safe.
           DBGPRINT("Sector in state GARBAGE fount at init\n");
+          udb_sector_header_t h;
+          h.magic = UDB_MAGIC;
+          h.status = UDB_SECTOR_STATUS_ERASED;
+          h.sequence = udb->counter++;
+          hal->erase(udb->hal.base_addresses[i], hal->sector_size);
+          hal->write(udb->hal.base_addresses[i], &h, sizeof(udb_sector_header_t));
           break;
         }
       }
     }
-
     r = true;
   }
  init_done:
