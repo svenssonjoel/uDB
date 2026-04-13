@@ -101,7 +101,8 @@ bitwise-pattern-matching.
 
 Example, give me all values that have a key where the highest three bits are 101
 
-
+This way the application can assign a semantics to keys, within what is
+possible given the predicates.
 
 
 
