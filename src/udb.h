@@ -35,8 +35,8 @@ extern "C" {
   
 typedef struct {
   uint32_t *base_addresses;
-  uint32_t sector_size;
   uint32_t num_sectors;
+  uint32_t sector_size;
   uint32_t min_write_size;
 
   // low level operations on the flash memory
@@ -54,11 +54,11 @@ typedef enum {
 } udb_state_t;
 
 typedef struct {
-  udb_hal_t hal;
+  udb_hal_t   hal;
   udb_state_t state;
-  uint32_t  active_sector;
-  uint32_t  write_pos;
-  uint32_t  counter;
+  uint32_t    active_sector;
+  uint32_t    write_pos;
+  uint32_t    counter;
 } udb_t;
 
   

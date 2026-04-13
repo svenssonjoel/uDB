@@ -35,3 +35,73 @@
      - The book "Operating Systems - Three easy pieces" chapter 43
        "log-structured file systems" will be read for inspiration.
   2. Efficiency (in space and time)
+
+
+# API
+
+## Configuration
+
+The `udb_hal_t` is used to configure an instance of uDB.
+
+```
+typedef struct {
+  uint32_t *base_addresses;
+  uint32_t num_sectors;
+  uint32_t sector_size;
+  uint32_t min_write_size;
+
+  // low level operations on the flash memory
+  bool (*read)(uint32_t addr, void *buf, size_t len);
+  bool (*write)(uint32_t addr, const void *buf, size_t len);
+  bool (*erase)(uint32_t addr, size_t len);
+  // Utility functions provided by target platform
+  uint16_t (*crc16)(const void *buf, size_t len);
+} udb_hal_t;
+```
+
+`base_addresses` is an array of `num_sectors` addresses of flash
+sectors. All sectors must be the same size, `sector_size`
+
+TBD: min_write_size will most likely be required to be a single byte,
+     at least to begin with.
+
+`read`, `write` and `erase` are callbacks provided by the user of uDB
+for reading, writing and erasing flash.
+
+`crc16` is a user provided crcr16 implementation. Most embedded
+software will very likely already have an implementation of crc16 so
+this is to be able to reuse that code.
+
+## initialization
+
+```
+bool udb_init(udb_t *udb, udb_hal_t *hal);
+```
+
+The init function takes a pointer to a `udb_hal_t` configuration
+and uses the values in that configuration to initialize the uDB.
+The `udb_t` represents the state of the instance of uDB that we initialize
+and is populated but the init function.
+
+## Get and Put
+
+TBD exact interface but `udb_put` will store a new, or update an old, KV pair
+in the database. Since this is flash, update means to "invalidate" the old occurrency
+and then write a new fresh KV later in memory.
+
+Compaction (GC) will clean up invalidated entries periodically.
+
+## Iterator API
+
+TBD exact interface but this will be an api for initializing  "iterator"
+objects. An udb_iterate function or similar, will take the iterator and give
+a value until there are no more values to give.
+The iterator should support some simple predicates. something like
+bitwise-pattern-matching.
+
+Example, give me all values that have a key where the highest three bits are 101
+
+
+
+
+
