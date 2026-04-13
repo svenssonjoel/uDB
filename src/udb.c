@@ -280,7 +280,8 @@ bool udb_init(udb_t *udb, udb_hal_t *hal) {
 
 // TODO: udb_put should fail if uDB is in compacting mode.
 //       if a put fails, we should transition to compacting mode
-
+//       Maybe needs to return something with more detail
+//       than just "true/false" ..
 
 /**
  * Add a key/value pair to the uDB.
@@ -290,7 +291,7 @@ bool udb_init(udb_t *udb, udb_hal_t *hal) {
  * \param size Size of the payload in bytes.
  * \return Success of failure.
  */
-bool udb_put(udb_t *udb, uint32_t key, uint8_t *payload, size_t size) {
+ bool udb_put(udb_t *udb, uint32_t key, uint8_t *payload, size_t size) {
   if (udb->write_pos + sizeof(udb_record_header_t) + size > udb->hal.sector_size) return false;
 
   // Implements the "protocol"
