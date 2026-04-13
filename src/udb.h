@@ -63,6 +63,8 @@ typedef struct {
 
   
 extern bool udb_init(udb_t *udb, udb_hal_t *hal);
+extern bool udb_put(udb_t *udb, uint32_t key, uint8_t *payload, size_t size);
+extern int udb_get(udb_t *udb, uint32_t key, uint8_t *payload, size_t size);
 #ifdef __cplusplus
 }
 #endif
