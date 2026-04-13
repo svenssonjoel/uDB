@@ -279,14 +279,101 @@ bool udb_init(udb_t *udb, udb_hal_t *hal) {
 // KV interface
 
 bool udb_put(udb_t *udb, uint32_t key, uint8_t *payload, size_t size) {
-  (void) udb;
-  (void) key;
-  (void) payload;
-  (void) size;
-  // use the active sector and the write_pos.
-  // payload must be smaller than a (sector_size - sector headers entry headers and so on.)
+  if (udb->write_pos + sizeof(udb_record_header_t) + size > udb->hal.sector_size) return false;
+
+  // Implements the "protocol"
+  // 1. Set status WRITING
+  // 2. Write the payload
+  // 3. Set status COMMITTED
+  uint32_t base = udb->hal.base_addresses[udb->active_sector];
+  udb_record_header_t rec;
+  uint32_t status_pos = udb->write_pos;
+  rec.status = UDB_RECORD_STATUS_WRITING;
+  rec.key = key;
+  rec.size = (uint16_t)size;
+  rec.crc = udb->hal.crc16(payload, size);
+  udb->hal.write(base + udb->write_pos, &rec, sizeof(udb_record_header_t));
+  udb->write_pos += sizeof(udb_record_header_t);
+  udb->hal.write(base + udb->write_pos, payload, size);
+  udb->write_pos += size;
+
+  uint8_t committed = UDB_RECORD_STATUS_COMMITTED;
+  udb->hal.write(base + status_pos, &committed, 1);
+
   return true;
 }
 
+
+/**
+ * Look up value associated with a key.
+ *
+ * \param udb uDB instance.
+ * \param key Key to search for.
+ * \param payload Buffer to copy the payload into.
+ * \param size Return size of the payload.
+ * \return number of bytes written to payload buffer or -1 if KV does not exist.
+ */
+int udb_get(udb_t *udb, uint32_t key, uint8_t *payload, size_t size) {
+
+  bool found = false;
+  uint32_t sector_seq = 0;
+  uint32_t payload_size = 0;
+  uint32_t addr = 0;
+
+  int bytes_written = -1;
+  
+  for (uint32_t s = 0; s < udb->hal.num_sectors; s++ ) {
+    udb_sector_header_t sector_header;
+    get_sector_header(udb, s, &sector_header);
+    if (sector_header.magic == UDB_MAGIC &&
+        (sector_header.status == UDB_SECTOR_STATUS_ACTIVE ||
+         sector_header.status == UDB_SECTOR_STATUS_COMPACTING)) {
+
+      // Optimization skip this sector if we already have a hit
+      // in a fresher sector.
+      if (found && sector_seq > sector_header.sequence) continue;
+
+      uint32_t base  = udb->hal.base_addresses[s];
+      uint32_t pos = sizeof(udb_sector_header_t);
+      while (pos + sizeof(udb_record_header_t) <= udb->hal.sector_size) {
+        // if the status is ERASED: reached end of data in this sector
+        // if the status is WRIRING: The rest of sector is unreadable 
+        udb_record_header_t rec;
+        udb->hal.read(base + pos, &rec, sizeof(udb_record_header_t));
+        if (rec.status == UDB_RECORD_STATUS_EMPTY ||
+            rec.status == UDB_RECORD_STATUS_WRITING) break;
+        //
+        // Finding the "most recent" Value associated with a key
+        // is a bit tricky.
+        //   1. If the same key appears twice in a sector, then
+        //      the later one (higher address) is newer.
+        //   2. If the same key appears in two different sectors.
+        //      we can use the sector sequence number to break tie.
+        //
+        //  Optimization: If we have a hit on a key
+        //    in sector with seq-nr N there is no point in searching
+        //    sectors with seq-nr M < N 
+        if (rec.status == UDB_RECORD_STATUS_COMMITTED &&
+            rec.key == key) {
+          found = true;
+          sector_seq = sector_header.sequence;
+          payload_size = rec.size;
+          addr = base + pos + sizeof(udb_record_header_t);
+        }
+        pos += sizeof(udb_record_header_t) + rec.size;
+      }
+    }
+  }
+
+  if (found) {
+    // Not sure what to think about KV pairs where V is empty
+    bytes_written = 0;
+    if ( payload_size > 0 ) {
+      bytes_written = (int) (payload_size < size ? payload_size : size);
+      udb->hal.read(addr, payload, bytes_written);
+    }
+  }
+  return bytes_written;
+}
 
 
