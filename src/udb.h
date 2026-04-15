@@ -22,8 +22,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-#ifndef _UDB_H_
-#define _UDB_H_
+#ifndef UDB_H
+#define UDB_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -32,39 +32,7 @@ extern "C" {
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
-  
-typedef struct {
-  uint32_t *base_addresses;
-  uint32_t num_sectors;
-  uint32_t sector_size;
-  uint32_t min_write_size;
 
-  // low level operations on the flash memory
-  bool (*read)(uint32_t addr, void *buf, size_t len);
-  bool (*write)(uint32_t addr, const void *buf, size_t len);
-  bool (*erase)(uint32_t addr, size_t len);
-  // Utility functions provided by target platform
-  uint16_t (*crc16)(const void *buf, size_t len);
-} udb_hal_t;
-
-typedef enum {
-  UDB_STATE_UNINITIALIZED = 0,
-  UDB_STATE_AVAILABLE,
-  UDB_STATE_COMPACTING,
-} udb_state_t;
-
-typedef struct {
-  udb_hal_t   hal;
-  udb_state_t state;
-  uint32_t    active_sector;
-  uint32_t    write_pos;
-  uint32_t    counter;
-} udb_t;
-
-  
-extern bool udb_init(udb_t *udb, udb_hal_t *hal);
-extern bool udb_put(udb_t *udb, uint32_t key, uint8_t *payload, size_t size);
-extern int udb_get(udb_t *udb, uint32_t key, uint8_t *payload, size_t size);
 #ifdef __cplusplus
 }
 #endif
